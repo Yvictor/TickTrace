@@ -1,23 +1,20 @@
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, BufReader};
 use anyhow::Result;
-use crossbeam_queue::SegQueue;
-use std::sync::Arc;
-use crate::message::QuoteData;
 use tracing::error;
+use flume::{Sender, Receiver};
 
 const BUFFER_SIZE: usize = 1024 * 1024; // 1MB buffer
 
 #[derive(Clone)]
 pub struct QuoteServer {
-    queue: Arc<SegQueue<QuoteData>>,
+    sender: Sender<Vec<u8>>, // Raw message queue
 }
 
 impl QuoteServer {
-    pub fn new() -> Self {
-        Self {
-            queue: Arc::new(SegQueue::new()),
-        }
+    pub fn new(capacity: usize) -> (Self, Receiver<Vec<u8>>) {
+        let (sender, receiver) = flume::bounded(capacity);
+        (Self { sender }, receiver)
     }
 
     pub async fn run(&self, addr: &str) -> Result<()> {
@@ -28,9 +25,9 @@ impl QuoteServer {
             let (socket, _) = listener.accept().await?;
             self.configure_socket(&socket)?;
             
-            let queue = self.queue.clone();
+            let sender = self.sender.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_connection(socket, queue).await {
+                if let Err(e) = handle_connection(socket, sender).await {
                     error!("Connection error: {}", e);
                 }
             });
@@ -54,33 +51,38 @@ impl QuoteServer {
         }
         Ok(())
     }
+
+    pub fn is_full(&self) -> bool {
+        self.sender.is_full()
+    }
+
+    pub fn len(&self) -> usize {
+        self.sender.len()
+    }
 }
 
 async fn handle_connection(
     socket: TcpStream,
-    queue: Arc<SegQueue<QuoteData>>,
+    sender: Sender<Vec<u8>>,
 ) -> Result<()> {
     let mut reader = BufReader::with_capacity(BUFFER_SIZE, socket);
-    let mut len_buf = [0u8; 1];
+    let mut topic_len_buf = [0u8; 1];
+    let mut data_len_buf = [0u8; 1];
 
     loop {
-        // Read data length
-        reader.read_exact(&mut len_buf).await?;
-        let data_len = len_buf[0];
+        reader.read_exact(&mut topic_len_buf).await?;
+        let topic_len = topic_len_buf[0];
+        let mut topic = vec![0u8; topic_len as usize];
+        reader.read_exact(&mut topic).await?;
 
-        // Read MessagePack data
+        reader.read_exact(&mut data_len_buf).await?;
+        let data_len = data_len_buf[0];
         let mut data = vec![0u8; data_len as usize];
         reader.read_exact(&mut data).await?;
-
-        // Try to decode the QuoteData
-        match rmp_serde::from_slice::<QuoteData>(&data) {
-            Ok(quote_data) => {
-                queue.push(quote_data);
-            }
-            Err(e) => {
-                error!("Failed to decode QuoteData: {}", e);
-                continue;
-            }
+        
+        if let Err(e) = sender.send_async(data).await {
+            error!("Failed to queue message: {}", e);
+            continue;
         }
     }
 } 
@@ -93,11 +95,14 @@ mod tests {
     use rust_decimal_macros::dec;
     use std::time::Duration;
     use compact_str::CompactString;
+    use crate::message::QuoteData;
+    use flume::bounded;
+    use crate::processor::QuoteProcessor;
 
     #[tokio::test]
     async fn test_server_connection_and_data_handling() {
         // Start server
-        let server = QuoteServer::new();
+        let (server, receiver) = QuoteServer::new(1000);
         let server_addr = "127.0.0.1:8899";
         
         let server_handle = tokio::spawn({
@@ -107,7 +112,6 @@ mod tests {
             }
         });
 
-        // Give server time to start
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Create test data
@@ -133,34 +137,38 @@ mod tests {
             simtrade: 0,
         };
 
-        // Connect to server and send data
+        // Connect and send data
         let mut stream = TcpStream::connect(server_addr).await.unwrap();
         
-        // Serialize and send data
+        // Send topic first
+        let topic = "quotes";
+        stream.write_all(&[topic.len() as u8]).await.unwrap();
+        stream.write_all(topic.as_bytes()).await.unwrap();
+
+        // Then send MessagePack data
         let encoded = rmp_serde::to_vec(&quote).unwrap();
-        let len = encoded.len() as u8;
-        
-        stream.write_all(&[len]).await.unwrap();
+        stream.write_all(&[encoded.len() as u8]).await.unwrap();
         stream.write_all(&encoded).await.unwrap();
 
-        // Give some time for server to process
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Verify data was received and queued
-        let received = server.queue.pop().unwrap();
-        assert_eq!(received.code, "TEST");
-        assert_eq!(received.open, dec!(100.00));
-        assert_eq!(received.close, dec!(101.00));
+        let received = receiver.recv_async().await.unwrap();
+        let decoded = rmp_serde::from_slice::<QuoteData>(&received).unwrap();
+        assert_eq!(decoded.code, "TEST");
+        assert_eq!(decoded.open, dec!(100.00));
+        assert_eq!(decoded.close, dec!(101.00));
         
-        // Cleanup
         server_handle.abort();
     }
 
     #[tokio::test]
     async fn test_invalid_data_handling() {
-        let server = QuoteServer::new();
+        let (server, raw_receiver) = QuoteServer::new(1000);
+        let (quote_sender, quote_receiver) = bounded(1000);
         let server_addr = "127.0.0.1:8900";
         
+        // Start server
         let server_handle = tokio::spawn({
             let server = server.clone();
             async move {
@@ -168,20 +176,33 @@ mod tests {
             }
         });
 
+        // Start processor
+        let processor = QuoteProcessor::new(raw_receiver, quote_sender);
+        let processor_handle = tokio::spawn(async move {
+            processor.run().await.unwrap();
+        });
+
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Connect and send invalid data
         let mut stream = TcpStream::connect(server_addr).await.unwrap();
-        let invalid_data = vec![1, 2, 3, 4]; // Invalid MessagePack data
         
+        // Send topic
+        let topic = "quotes";
+        stream.write_all(&[topic.len() as u8]).await.unwrap();
+        stream.write_all(topic.as_bytes()).await.unwrap();
+
+        // Send invalid MessagePack data
+        let invalid_data = vec![1, 2, 3, 4];
         stream.write_all(&[invalid_data.len() as u8]).await.unwrap();
         stream.write_all(&invalid_data).await.unwrap();
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        // Verify nothing was queued
-        assert!(server.queue.is_empty());
+        // Verify no valid quotes were processed
+        assert!(quote_receiver.is_empty());
         
         server_handle.abort();
+        processor_handle.abort();
     }
 } 
