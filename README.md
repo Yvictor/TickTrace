@@ -18,5 +18,6 @@ A high-performance market data collection service built with Rust and Tokio.
 - Apache Arrow/Parquet
 - MessagePack serialization
 - Lock-free queuing system
+- TonboDB
 
 ## Project Structure
