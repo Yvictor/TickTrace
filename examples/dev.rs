@@ -3,48 +3,10 @@ use rsolace::solclient::{SessionProps, SolClient};
 use rsolace::types::{SolClientLogLevel, SolClientSubscribeFlags};
 use tracing_subscriber;
 use std::error::Error;
-use serde::{Deserialize, Serialize};
-use rust_decimal::Decimal;
-use compact_str::CompactString;
 use tokio::net::TcpStream;
 use tokio::io::AsyncWriteExt;
+use tick_trace::message::QuoFOPv2;
 
-
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-pub struct QuoteData {
-    pub code: CompactString,
-    pub date: CompactString, // NaiveDateTime,
-    pub time: CompactString, // NaiveDateTime,
-    pub target_kind_price: Decimal,
-    pub open: Decimal,
-    pub avg_price: Decimal,
-    pub close: Decimal,
-    pub high: Decimal,
-    pub low: Decimal,
-    pub amount: Decimal,
-    pub amount_sum: Decimal,
-    pub volume: i64,
-    pub vol_sum: i64,
-    pub tick_type: i32,
-    pub diff_type: i32,
-    pub diff_price: Decimal,
-    pub diff_rate: Decimal,
-    pub trade_bid_vol_sum: i64,
-    pub trade_ask_vol_sum: i64,
-    pub trade_bid_cnt: i64,
-    pub trade_ask_cnt: i64,
-    pub bid_price: [Decimal; 5],
-    pub bid_volume: [i64; 5],
-    pub diff_bid_vol: [i64; 5],
-    pub ask_price: [Decimal; 5],
-    pub ask_volume: [i64; 5],
-    pub diff_ask_vol: [i64; 5],
-    pub first_derived_bid_price: Decimal,
-    pub first_derived_ask_price: Decimal,
-    pub first_derived_bid_volume: i64,
-    pub first_derived_ask_volume: i64,
-    pub simtrade: i32,
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -96,7 +58,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         .to_rfc3339(),
                     data
                 );
-                let quote: QuoteData = rmp_serde::from_slice(&data).unwrap();
+                let quote: QuoFOPv2 = rmp_serde::from_slice(&data).unwrap();
                 tracing::info!("quote: {:?}", quote);
                 let topic_len = topic.len() as u8;
                 let data_len = data.len() as u8;

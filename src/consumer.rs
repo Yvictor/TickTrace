@@ -21,6 +21,7 @@ pub struct QuoteConsumer {
     schema: Arc<Schema>,
 }
 
+// TODO: fix parquet batch writer
 impl QuoteConsumer {
     pub fn new(
         receiver: Receiver<QuoFOPv2>,

@@ -31,7 +31,11 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_line_number(true)
+        .with_thread_ids(true)
+        .init();
 
     let args = Args::parse();
 
