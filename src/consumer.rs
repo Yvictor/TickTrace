@@ -1,19 +1,19 @@
-use crate::message::QuoteData;
+use crate::message::QuoFOPv2;
 use anyhow::Result;
 use arrow::datatypes::{Field, FieldRef, Schema};
+use compact_str::CompactString;
 use flume::Receiver;
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::file::properties::WriterProperties;
+use rust_decimal_macros::dec;
+use serde_arrow::schema::{SchemaLike, TracingOptions};
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 use tracing::info;
-use compact_str::CompactString;
-use rust_decimal_macros::dec;
-use serde_arrow::schema::{SchemaLike, TracingOptions};
 
 pub struct QuoteConsumer {
-    receiver: Receiver<QuoteData>,
+    receiver: Receiver<QuoFOPv2>,
     batch_size: usize,
     output_dir: String,
     current_file: Option<String>,
@@ -23,19 +23,18 @@ pub struct QuoteConsumer {
 
 impl QuoteConsumer {
     pub fn new(
-        receiver: Receiver<QuoteData>,
+        receiver: Receiver<QuoFOPv2>,
         batch_size: usize,
         output_dir: String,
     ) -> Result<Self> {
         // Create sample data for schema inference
         //let fields = Vec::<FieldRef>::from_type::<QuoteData>(TracingOptions::default())?;
-        let sample = QuoteData {
+        let sample = QuoFOPv2 {
             code: CompactString::from(""),
-            datetime: CompactString::from(""),
-            open: dec!(0),
+            date: CompactString::from(""),
+            time: CompactString::from(""),
             target_kind_price: dec!(0),
-            trade_bid_vol_sum: 0,
-            trade_ask_vol_sum: 0,
+            open: dec!(0),
             avg_price: dec!(0),
             close: dec!(0),
             high: dec!(0),
@@ -48,6 +47,20 @@ impl QuoteConsumer {
             diff_type: 0,
             diff_price: dec!(0),
             diff_rate: dec!(0),
+            trade_bid_vol_sum: 0,
+            trade_ask_vol_sum: 0,
+            trade_bid_cnt: 0,
+            trade_ask_cnt: 0,
+            bid_price: [dec!(0); 5],
+            bid_volume: [0; 5],
+            diff_bid_vol: [0; 5],
+            ask_price: [dec!(0); 5],
+            ask_volume: [0; 5],
+            diff_ask_vol: [0; 5],
+            first_derived_bid_price: dec!(0),
+            first_derived_ask_price: dec!(0),
+            first_derived_bid_volume: 0,
+            first_derived_ask_volume: 0,
             simtrade: 0,
         };
 
@@ -90,7 +103,7 @@ impl QuoteConsumer {
         Ok(())
     }
 
-    fn write_batch(&mut self, quotes: &[QuoteData]) -> Result<()> {
+    fn write_batch(&mut self, quotes: &[QuoFOPv2]) -> Result<()> {
         // Convert quotes to Arrow arrays using serde_arrow
         let record_batch = serde_arrow::to_record_batch(&self.fields, &quotes)?;
 
@@ -120,20 +133,19 @@ impl QuoteConsumer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::QuoteData;
+    use crate::message::QuoFOPv2;
     use compact_str::CompactString;
     use rust_decimal_macros::dec;
     use std::fs;
     use tempfile::tempdir;
 
-    fn create_test_quote() -> QuoteData {
-        QuoteData {
+    fn create_test_quote() -> QuoFOPv2 {
+        QuoFOPv2 {
             code: CompactString::from("2330"),
-            datetime: CompactString::from("2024-03-20 10:30:00"),
-            open: dec!(100.00),
+            date: CompactString::from("2024-03-20"),
+            time: CompactString::from("10:30:00"),
             target_kind_price: dec!(101.00),
-            trade_bid_vol_sum: 500,
-            trade_ask_vol_sum: 600,
+            open: dec!(100.00),
             avg_price: dec!(100.50),
             close: dec!(101.00),
             high: dec!(101.50),
@@ -146,6 +158,20 @@ mod tests {
             diff_type: 1,
             diff_price: dec!(1.00),
             diff_rate: dec!(1.0),
+            trade_bid_vol_sum: 500,
+            trade_ask_vol_sum: 600,
+            trade_bid_cnt: 100,
+            trade_ask_cnt: 120,
+            bid_price: [dec!(101.00); 5],
+            bid_volume: [500; 5],
+            diff_bid_vol: [0; 5],
+            ask_price: [dec!(101.00); 5],
+            ask_volume: [500; 5],
+            diff_ask_vol: [0; 5],
+            first_derived_bid_price: dec!(101.00),
+            first_derived_ask_price: dec!(101.00),
+            first_derived_bid_volume: 500,
+            first_derived_ask_volume: 500,
             simtrade: 0,
         }
     }
@@ -161,17 +187,15 @@ mod tests {
         let mut consumer = QuoteConsumer::new(receiver, 2, output_dir.clone())?;
 
         // Start consumer in background
-        let consumer_handle = tokio::spawn(async move {
-            consumer.run().await
-        });
+        let consumer_handle = tokio::spawn(async move { consumer.run().await });
 
         // Send test data
         sender.send_async(create_test_quote()).await?;
         sender.send_async(create_test_quote()).await?;
-        
+
         // Close channel to stop consumer
         drop(sender);
-        
+
         // Wait for consumer to finish
         consumer_handle.await??;
 
@@ -179,7 +203,8 @@ mod tests {
         let files: Vec<_> = fs::read_dir(&output_dir)?
             .filter_map(|entry| entry.ok())
             .filter(|entry| {
-                entry.path()
+                entry
+                    .path()
                     .extension()
                     .map_or(false, |ext| ext == "parquet")
             })
@@ -194,7 +219,7 @@ mod tests {
             .collect::<Result<Vec<arrow::record_batch::RecordBatch>, _>>()?
             .into_iter()
             .collect();
-        
+
         assert_eq!(batches.len(), 1, "Should have one batch");
         assert_eq!(batches[0].num_rows(), 2, "Batch should have 2 rows");
 
@@ -208,20 +233,19 @@ mod tests {
         let (sender, receiver) = flume::bounded(100);
         let mut consumer = QuoteConsumer::new(receiver, 3, output_dir.clone())?;
 
-        let consumer_handle = tokio::spawn(async move {
-            consumer.run().await
-        });
+        let consumer_handle = tokio::spawn(async move { consumer.run().await });
 
         // Send only 1 quote (less than batch size)
         sender.send_async(create_test_quote()).await?;
         drop(sender);
-        
+
         consumer_handle.await??;
 
         let files: Vec<_> = fs::read_dir(&output_dir)?
             .filter_map(|entry| entry.ok())
             .filter(|entry| {
-                entry.path()
+                entry
+                    .path()
                     .extension()
                     .map_or(false, |ext| ext == "parquet")
             })
@@ -235,7 +259,7 @@ mod tests {
             .collect::<Result<Vec<arrow::record_batch::RecordBatch>, _>>()?
             .into_iter()
             .collect();
-        
+
         assert_eq!(batches[0].num_rows(), 1, "Should have 1 row");
 
         Ok(())

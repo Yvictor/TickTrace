@@ -95,7 +95,7 @@ mod tests {
     use rust_decimal_macros::dec;
     use std::time::Duration;
     use compact_str::CompactString;
-    use crate::message::QuoteData;
+    use crate::message::QuoFOPv2;
     use flume::bounded;
     use crate::processor::QuoteProcessor;
 
@@ -115,13 +115,12 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Create test data
-        let quote = QuoteData {
+        let quote = QuoFOPv2 {
             code: CompactString::from("TEST"),
-            datetime: CompactString::from("2024-03-20 10:30:00"),
-            open: dec!(100.00),
+            date: CompactString::from("2024-03-20"),
+            time: CompactString::from("10:30:00"),
             target_kind_price: dec!(101.00),
-            trade_bid_vol_sum: 500,
-            trade_ask_vol_sum: 600,
+            open: dec!(100.00),
             avg_price: dec!(100.50),
             close: dec!(101.00),
             high: dec!(101.50),
@@ -134,6 +133,20 @@ mod tests {
             diff_type: 1,
             diff_price: dec!(1.00),
             diff_rate: dec!(1.0),
+            trade_bid_vol_sum: 500,
+            trade_ask_vol_sum: 600,
+            trade_bid_cnt: 100,
+            trade_ask_cnt: 120,
+            bid_price: [dec!(101.00); 5],
+            bid_volume: [500; 5],
+            diff_bid_vol: [0; 5],
+            ask_price: [dec!(101.00); 5],
+            ask_volume: [500; 5],
+            diff_ask_vol: [0; 5],
+            first_derived_bid_price: dec!(101.00),
+            first_derived_ask_price: dec!(101.00),
+            first_derived_bid_volume: 500,
+            first_derived_ask_volume: 500,
             simtrade: 0,
         };
 
@@ -154,7 +167,7 @@ mod tests {
 
         // Verify data was received and queued
         let received = receiver.recv_async().await.unwrap();
-        let decoded = rmp_serde::from_slice::<QuoteData>(&received).unwrap();
+        let decoded = rmp_serde::from_slice::<QuoFOPv2>(&received).unwrap();
         assert_eq!(decoded.code, "TEST");
         assert_eq!(decoded.open, dec!(100.00));
         assert_eq!(decoded.close, dec!(101.00));

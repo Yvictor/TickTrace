@@ -3,7 +3,7 @@ use flume::bounded;
 use rust_decimal_macros::dec;
 use std::time::Duration;
 use tick_trace::{
-    message::QuoteData,
+    message::TicFopV1,
     processor::QuoteProcessor,
     server::QuoteServer,
     consumer::QuoteConsumer,
@@ -13,8 +13,8 @@ use tempfile::tempdir;
 use tokio::net::TcpStream;
 use tokio::io::AsyncWriteExt;
 
-fn create_test_quote() -> QuoteData {
-    QuoteData {
+fn create_test_quote() -> TicFopV1 {
+    TicFopV1 {
         code: CompactString::from("2330"),
         datetime: CompactString::from("2024-03-20 10:30:00"),
         open: dec!(100.00),
