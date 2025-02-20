@@ -23,24 +23,26 @@ pub struct QuoteConsumer {
 
 impl QuoteConsumer {
     fn create_schema() -> Result<(Vec<FieldRef>, Arc<Schema>)> {
+        let precision = 20;
+        let scale = 4;
         let fields: Vec<FieldRef> = vec![
             Field::new("code", DataType::Utf8, false),
             Field::new("date", DataType::Utf8, false),
             Field::new("time", DataType::Utf8, false),
-            Field::new("target_kind_price", DataType::Decimal128(16_u8, 6_i8), false),
-            Field::new("open", DataType::Decimal128(16_u8, 6_i8), false),
-            Field::new("avg_price", DataType::Decimal128(16_u8, 6_i8), false),
-            Field::new("close", DataType::Decimal128(16_u8, 6_i8), false),
-            Field::new("high", DataType::Decimal128(16_u8, 6_i8), false),
-            Field::new("low", DataType::Decimal128(16_u8, 6_i8), false),
-            Field::new("amount", DataType::Decimal128(20_u8, 6_i8), false),
-            Field::new("amount_sum", DataType::Decimal128(20_u8, 6_i8), false),
+            Field::new("target_kind_price", DataType::Decimal128(precision, scale), false),
+            Field::new("open", DataType::Decimal128(precision, scale), false),
+            Field::new("avg_price", DataType::Decimal128(precision, scale), false),
+            Field::new("close", DataType::Decimal128(precision, scale), false),
+            Field::new("high", DataType::Decimal128(precision, scale), false),
+            Field::new("low", DataType::Decimal128(precision, scale), false),
+            Field::new("amount", DataType::Decimal128(precision, scale), false),
+            Field::new("amount_sum", DataType::Decimal128(precision, scale), false),
             Field::new("volume", DataType::Int64, false),
             Field::new("vol_sum", DataType::Int64, false),
             Field::new("tick_type", DataType::Int32, false),
             Field::new("diff_type", DataType::Int32, false),
-            Field::new("diff_price", DataType::Decimal128(16_u8, 6_i8), false),
-            Field::new("diff_rate", DataType::Decimal128(16_u8, 6_i8), false),
+            Field::new("diff_price", DataType::Decimal128(precision, scale), false),
+            Field::new("diff_rate", DataType::Decimal128(precision, scale), false),
             Field::new("trade_bid_vol_sum", DataType::Int64, false),
             Field::new("trade_ask_vol_sum", DataType::Int64, false),
             Field::new("trade_bid_cnt", DataType::Int64, false),
@@ -48,7 +50,7 @@ impl QuoteConsumer {
             Field::new(
                 "bid_price",
                 DataType::FixedSizeList(
-                    Arc::new(Field::new("item", DataType::Decimal128(16_u8, 6_i8), false)),
+                    Arc::new(Field::new("item", DataType::Decimal128(precision, scale), false)),
                     5,
                 ),
                 false,
@@ -66,7 +68,7 @@ impl QuoteConsumer {
             Field::new(
                 "ask_price",
                 DataType::FixedSizeList(
-                    Arc::new(Field::new("item", DataType::Decimal128(16_u8, 6_i8), false)),
+                    Arc::new(Field::new("item", DataType::Decimal128(precision, scale), false)),
                     5,
                 ),
                 false,
@@ -81,8 +83,8 @@ impl QuoteConsumer {
                 DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, false)), 5),
                 false,
             ),
-            Field::new("first_derived_bid_price", DataType::Decimal128(16_u8, 6_i8), false),
-            Field::new("first_derived_ask_price", DataType::Decimal128(16_u8, 6_i8), false),
+            Field::new("first_derived_bid_price", DataType::Decimal128(precision, scale), false),
+            Field::new("first_derived_ask_price", DataType::Decimal128(precision, scale), false),
             Field::new("first_derived_bid_volume", DataType::Int64, false),
             Field::new("first_derived_ask_volume", DataType::Int64, false),
             Field::new("simtrade", DataType::Int32, false),
@@ -180,6 +182,9 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
     use arrow::datatypes::DataType;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::basic::LogicalType;
+    use parquet::basic::Type;
 
     fn create_test_quote() -> QuoFOPv2 {
         QuoFOPv2 {
@@ -309,6 +314,8 @@ mod tests {
 
     #[test]
     fn test_schema_creation() -> Result<()> {
+        let expected_precision = 20;
+        let expected_scale = 4;
         let (_fields, schema) = QuoteConsumer::create_schema()?;
 
         // Helper function to check decimal type with precision and scale
@@ -321,16 +328,16 @@ mod tests {
         };
 
         // Test decimal fields
-        assert!(is_decimal_type("target_kind_price", 16, 6));
-        assert!(is_decimal_type("open", 16, 6));
-        assert!(is_decimal_type("avg_price", 16, 6));
-        assert!(is_decimal_type("close", 16, 6));
-        assert!(is_decimal_type("high", 16, 6));
-        assert!(is_decimal_type("low", 16, 6));
-        assert!(is_decimal_type("amount", 20, 6));
-        assert!(is_decimal_type("amount_sum", 20, 6));
-        assert!(is_decimal_type("diff_price", 16, 6));
-        assert!(is_decimal_type("diff_rate", 16, 6));
+        assert!(is_decimal_type("target_kind_price", expected_precision, expected_scale));
+        assert!(is_decimal_type("open", expected_precision, expected_scale));
+        assert!(is_decimal_type("avg_price", expected_precision, expected_scale));
+        assert!(is_decimal_type("close", expected_precision, expected_scale));
+        assert!(is_decimal_type("high", expected_precision, expected_scale));
+        assert!(is_decimal_type("low", expected_precision, expected_scale));
+        assert!(is_decimal_type("amount", expected_precision, expected_scale));
+        assert!(is_decimal_type("amount_sum", expected_precision, expected_scale));
+        assert!(is_decimal_type("diff_price", expected_precision, expected_scale));
+        assert!(is_decimal_type("diff_rate", expected_precision, expected_scale));
 
         // Test array fields
         let test_fixed_size_list = |field_name: &str, expected_type: DataType| {
@@ -344,8 +351,8 @@ mod tests {
             }
         };
 
-        test_fixed_size_list("bid_price", DataType::Decimal128(16_u8, 6_i8));
-        test_fixed_size_list("ask_price", DataType::Decimal128(16_u8, 6_i8));
+        test_fixed_size_list("bid_price", DataType::Decimal128(expected_precision, expected_scale));
+        test_fixed_size_list("ask_price", DataType::Decimal128(expected_precision, expected_scale));
         test_fixed_size_list("bid_volume", DataType::Int64);
         test_fixed_size_list("ask_volume", DataType::Int64);
 
@@ -362,6 +369,119 @@ mod tests {
             schema.field_with_name("time").unwrap().data_type(),
             DataType::Utf8
         ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_file_schema() -> Result<()> {
+        let expected_precision = 20;
+        let expected_scale = 4;
+        // Setup test environment
+        let temp_dir = tempdir()?;
+        let output_dir = temp_dir.path().to_str().unwrap().to_string();
+        let (sender, receiver) = flume::bounded(100);
+        let mut consumer = QuoteConsumer::new(receiver, 1, output_dir.clone())?;
+
+        // Write one quote to create a parquet file
+        let consumer_handle = tokio::spawn(async move { consumer.run().await });
+        sender.send_async(create_test_quote()).await?;
+        drop(sender);
+        consumer_handle.await??;
+
+        // Get the written parquet file
+        let files: Vec<_> = fs::read_dir(&output_dir)?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().extension().map_or(false, |ext| ext == "parquet"))
+            .collect();
+        assert_eq!(files.len(), 1);
+
+        // let file = tokio::fs::File::open(files[0].path()).await.unwrap();
+        let file = File::open(files[0].path()).unwrap();
+        // Read the parquet file schema
+        // Configure options for reading from the async souce
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+                .unwrap();
+        let schema = builder.parquet_schema();
+
+        // Helper function to check decimal type
+        let is_decimal_type = |field_name: &str, p: i32, s: i32| {
+            let field = schema.columns().iter().find(|f| f.name() == field_name).unwrap();
+            println!("field: {:?}", field);
+            matches!(
+                field.logical_type(),
+                Some(LogicalType::Decimal{scale, precision} )if scale == s && precision == p
+            )
+        };
+
+        // Verify decimal fields
+        assert!(is_decimal_type("target_kind_price", expected_precision, expected_scale), "target_kind_price has wrong type");
+        // assert!(false);
+        assert!(is_decimal_type("open", expected_precision, expected_scale), "open has wrong type");
+        assert!(is_decimal_type("avg_price", expected_precision, expected_scale), "avg_price has wrong type");
+        assert!(is_decimal_type("close", expected_precision, expected_scale), "close has wrong type");
+        assert!(is_decimal_type("high", expected_precision, expected_scale), "high has wrong type");
+        assert!(is_decimal_type("low", expected_precision, expected_scale), "low has wrong type");
+        assert!(is_decimal_type("amount", expected_precision, expected_scale), "amount has wrong type");
+        assert!(is_decimal_type("amount_sum", expected_precision, expected_scale), "amount_sum has wrong type");
+        assert!(is_decimal_type("diff_price", expected_precision, expected_scale), "diff_price has wrong type");
+        assert!(is_decimal_type("diff_rate", expected_precision, expected_scale), "diff_rate has wrong type");
+
+        // Test array fields
+        // let test_fixed_size_list = |field_name: &str, expected_type: DataType| {
+        //     let field = schema.columns().iter().find(|f| f.name() == field_name).unwrap();
+        //     match field.physical_type() {
+        //         PhysicalType::FixedSizeList(item_field, size) => {
+        //             assert_eq!(*size, 5, "Fixed size list should have size 5");
+        //             assert_eq!(
+        //                 item_field.data_type(),
+        //                 &expected_type,
+        //                 "Field {} has wrong element type",
+        //                 field_name
+        //             );
+        //         }
+        //         _ => panic!("Field {} should be a FixedSizeList", field_name),
+        //     }
+        // };
+
+        // test_fixed_size_list("bid_price", DataType::Decimal128(16_u8, 6_i8));
+        // test_fixed_size_list("ask_price", DataType::Decimal128(16_u8, 6_i8));
+        // test_fixed_size_list("bid_volume", DataType::Int64);
+        // test_fixed_size_list("ask_volume", DataType::Int64);
+        // test_fixed_size_list("diff_bid_vol", DataType::Int64);
+        // test_fixed_size_list("diff_ask_vol", DataType::Int64);
+
+        // Test string fields
+        assert!(
+            matches!(schema.columns().iter().find(|f| f.name() == "code").unwrap().physical_type(), Type::BYTE_ARRAY),
+            "code should be Utf8"
+        );
+        assert!(
+            matches!(schema.columns().iter().find(|f| f.name() == "date").unwrap().physical_type(), Type::BYTE_ARRAY),
+            "date should be Utf8"
+        );
+        assert!(
+            matches!(schema.columns().iter().find(|f| f.name() == "time").unwrap().physical_type(), Type::BYTE_ARRAY),
+            "time should be Utf8"
+        );
+
+        // Test integer fields
+        assert!(
+            matches!(schema.columns().iter().find(|f| f.name() == "volume").unwrap().physical_type(), Type::INT64),
+            "volume should be Int64"
+        );
+        assert!(
+            matches!(schema.columns().iter().find(|f| f.name() == "vol_sum").unwrap().physical_type(), Type::INT64),
+            "vol_sum should be Int64"
+        );
+        assert!(
+            matches!(schema.columns().iter().find(|f| f.name() == "tick_type").unwrap().physical_type(), Type::INT32),
+            "tick_type should be Int32"
+        );
+        assert!(
+            matches!(schema.columns().iter().find(|f| f.name() == "simtrade").unwrap().physical_type(), Type::INT32),
+            "simtrade should be Int32"
+        );
 
         Ok(())
     }

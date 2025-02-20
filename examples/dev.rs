@@ -89,6 +89,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         SolClientSubscribeFlags::RequestConfirm,
     );
 
+
+    solclient.subscribe_ext(
+        "QUO/v2/FOP/*/TFE/RTFC5*",
+        SolClientSubscribeFlags::RequestConfirm,
+    );
+
     let mut count = 0;
     // Handle sending quotes in the main task
     tokio::spawn(async move {
