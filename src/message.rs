@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use rust_decimal::Decimal;
 use compact_str::CompactString;
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct QuoFOPv2 {
     pub code: CompactString,
     pub date: CompactString, // NaiveDateTime,
@@ -38,6 +38,7 @@ pub struct QuoFOPv2 {
     pub first_derived_ask_volume: i64,
     pub simtrade: i32,
 }
+// QuoFOPv2 { code: "TXFC5", date: "2025/02/20", time: "10:47:12.401000", target_kind_price: 23506.66, open: 23505, avg_price: 23450.543381, close: 23464, high: 23564, low: 23371, amount: 70392, amount_sum: 819502689, volume: 0, vol_sum: 34946, tick_type: 2, diff_type: 4, diff_price: -146, diff_rate: -0.618382, trade_bid_vol_sum: 15983, trade_ask_vol_sum: 18074, trade_bid_cnt: 23662, trade_ask_cnt: 22061, bid_price: [23463, 23462, 23461, 23460, 23459], bid_volume: [2, 7, 17, 16, 12], diff_bid_vol: [0, 0, 0, 0, 0], ask_price: [23464, 23465, 23466, 23467, 23468], ask_volume: [1, 7, 9, 20, 14], diff_ask_vol: [0, 0, 0, 0, 0], first_derived_bid_price: 23459, first_derived_ask_price: 23467, first_derived_bid_volume: 1, first_derived_ask_volume: 1, simtrade: 0 }
 
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]

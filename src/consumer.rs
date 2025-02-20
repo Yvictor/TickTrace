@@ -1,16 +1,15 @@
 use crate::message::QuoFOPv2;
 use anyhow::Result;
-use arrow::datatypes::{Field, FieldRef, Schema};
-use compact_str::CompactString;
+use arrow_schema::{Field, FieldRef, Schema, DataType};
 use flume::Receiver;
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::file::properties::WriterProperties;
-use rust_decimal_macros::dec;
-use serde_arrow::schema::{SchemaLike, TracingOptions};
+// use serde_arrow::schema::{SchemaLike, TracingOptions};
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 use tracing::info;
+
 
 pub struct QuoteConsumer {
     receiver: Receiver<QuoFOPv2>,
@@ -21,52 +20,80 @@ pub struct QuoteConsumer {
     schema: Arc<Schema>,
 }
 
-// TODO: fix parquet batch writer
-impl QuoteConsumer {
-    pub fn new(
-        receiver: Receiver<QuoFOPv2>,
-        batch_size: usize,
-        output_dir: String,
-    ) -> Result<Self> {
-        // Create sample data for schema inference
-        //let fields = Vec::<FieldRef>::from_type::<QuoteData>(TracingOptions::default())?;
-        let sample = QuoFOPv2 {
-            code: CompactString::from(""),
-            date: CompactString::from(""),
-            time: CompactString::from(""),
-            target_kind_price: dec!(0),
-            open: dec!(0),
-            avg_price: dec!(0),
-            close: dec!(0),
-            high: dec!(0),
-            low: dec!(0),
-            amount: dec!(0),
-            amount_sum: dec!(0),
-            volume: 0,
-            vol_sum: 0,
-            tick_type: 0,
-            diff_type: 0,
-            diff_price: dec!(0),
-            diff_rate: dec!(0),
-            trade_bid_vol_sum: 0,
-            trade_ask_vol_sum: 0,
-            trade_bid_cnt: 0,
-            trade_ask_cnt: 0,
-            bid_price: [dec!(0); 5],
-            bid_volume: [0; 5],
-            diff_bid_vol: [0; 5],
-            ask_price: [dec!(0); 5],
-            ask_volume: [0; 5],
-            diff_ask_vol: [0; 5],
-            first_derived_bid_price: dec!(0),
-            first_derived_ask_price: dec!(0),
-            first_derived_bid_volume: 0,
-            first_derived_ask_volume: 0,
-            simtrade: 0,
-        };
 
-        // Create schema from sample data
-        let fields = Vec::<FieldRef>::from_samples(&[&sample], TracingOptions::default())?;
+impl QuoteConsumer {
+    fn create_schema() -> Result<(Vec<FieldRef>, Arc<Schema>)> {
+        let fields: Vec<FieldRef> = vec![
+            Field::new("code", DataType::Utf8, false),
+            Field::new("date", DataType::Utf8, false),
+            Field::new("time", DataType::Utf8, false),
+            Field::new("target_kind_price", DataType::Decimal128(16_u8, 6_i8), false),
+            Field::new("open", DataType::Decimal128(16_u8, 6_i8), false),
+            Field::new("avg_price", DataType::Decimal128(16_u8, 6_i8), false),
+            Field::new("close", DataType::Decimal128(16_u8, 6_i8), false),
+            Field::new("high", DataType::Decimal128(16_u8, 6_i8), false),
+            Field::new("low", DataType::Decimal128(16_u8, 6_i8), false),
+            Field::new("amount", DataType::Decimal128(20_u8, 6_i8), false),
+            Field::new("amount_sum", DataType::Decimal128(20_u8, 6_i8), false),
+            Field::new("volume", DataType::Int64, false),
+            Field::new("vol_sum", DataType::Int64, false),
+            Field::new("tick_type", DataType::Int32, false),
+            Field::new("diff_type", DataType::Int32, false),
+            Field::new("diff_price", DataType::Decimal128(16_u8, 6_i8), false),
+            Field::new("diff_rate", DataType::Decimal128(16_u8, 6_i8), false),
+            Field::new("trade_bid_vol_sum", DataType::Int64, false),
+            Field::new("trade_ask_vol_sum", DataType::Int64, false),
+            Field::new("trade_bid_cnt", DataType::Int64, false),
+            Field::new("trade_ask_cnt", DataType::Int64, false),
+            Field::new(
+                "bid_price",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Decimal128(16_u8, 6_i8), false)),
+                    5,
+                ),
+                false,
+            ),
+            Field::new(
+                "bid_volume",
+                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, false)), 5),
+                false,
+            ),
+            Field::new(
+                "diff_bid_vol",
+                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, false)), 5),
+                false,
+            ),
+            Field::new(
+                "ask_price",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Decimal128(16_u8, 6_i8), false)),
+                    5,
+                ),
+                false,
+            ),
+            Field::new(
+                "ask_volume",
+                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, false)), 5),
+                false,
+            ),
+            Field::new(
+                "diff_ask_vol",
+                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, false)), 5),
+                false,
+            ),
+            Field::new("first_derived_bid_price", DataType::Decimal128(16_u8, 6_i8), false),
+            Field::new("first_derived_ask_price", DataType::Decimal128(16_u8, 6_i8), false),
+            Field::new("first_derived_bid_volume", DataType::Int64, false),
+            Field::new("first_derived_ask_volume", DataType::Int64, false),
+            Field::new("simtrade", DataType::Int32, false),
+        ].into_iter().map(|f| Arc::new(f)).collect();   
+
+        // let fields = Vec::<FieldRef>::from_type::<QuoFOPv2>(TracingOptions::default())?;
+        // let fields: Vec<FieldRef> = SchemaLike::from_type::<QuoFOPv2>(TracingOptions::default())?.into_iter().map(|f| Arc::new(f)).collect();
+        // let sample = QuoFOPv2::default();
+        // let fields = Vec::<FieldRef>::from_samples(&[&sample], TracingOptions::default())?;
+        // let fields = Vec::<FieldRef>::from_type::<Record>(TracingOptions::default())?;
+        // let fields: Vec<FieldRef> = SchemaLike::from_samples(&[&sample], TracingOptions::default())?;
         let schema = Arc::new(Schema::new(
             fields
                 .clone()
@@ -74,6 +101,19 @@ impl QuoteConsumer {
                 .map(|f| f.as_ref().clone())
                 .collect::<Vec<Field>>(),
         ));
+
+        // let field_refs = fields.iter().map(|f| Arc::new(f.clone())).collect();
+        // let schema = Arc::new(Schema::new(fields));
+
+        Ok((fields, schema))
+    }
+
+    pub fn new(
+        receiver: Receiver<QuoFOPv2>,
+        batch_size: usize,
+        output_dir: String,
+    ) -> Result<Self> {
+        let (fields, schema) = Self::create_schema()?;
 
         Ok(Self {
             receiver,
@@ -106,12 +146,12 @@ impl QuoteConsumer {
 
     fn write_batch(&mut self, quotes: &[QuoFOPv2]) -> Result<()> {
         // Convert quotes to Arrow arrays using serde_arrow
-        let record_batch = serde_arrow::to_record_batch(&self.fields, &quotes)?;
+        let record_batch = serde_arrow::to_record_batch(self.fields.as_slice(), &quotes)?;
 
         // Create new file for each batch
         let filename = format!(
             "quotes_{}.parquet",
-            chrono::Local::now().format("%Y%m%d_%H%M%S")
+            chrono::Local::now().format("%Y%m%d_%H%M%S_%6f")
         );
         let path = Path::new(&self.output_dir).join(&filename);
 
@@ -139,6 +179,7 @@ mod tests {
     use rust_decimal_macros::dec;
     use std::fs;
     use tempfile::tempdir;
+    use arrow::datatypes::DataType;
 
     fn create_test_quote() -> QuoFOPv2 {
         QuoFOPv2 {
@@ -262,6 +303,65 @@ mod tests {
             .collect();
 
         assert_eq!(batches[0].num_rows(), 1, "Should have 1 row");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_schema_creation() -> Result<()> {
+        let (_fields, schema) = QuoteConsumer::create_schema()?;
+
+        // Helper function to check decimal type with precision and scale
+        let is_decimal_type = |field_name: &str, precision: u8, scale: i8| {
+            let field = schema.field_with_name(field_name).unwrap();
+            matches!(
+                field.data_type(),
+                DataType::Decimal128(p, s) if *p == precision && *s == scale
+            )
+        };
+
+        // Test decimal fields
+        assert!(is_decimal_type("target_kind_price", 16, 6));
+        assert!(is_decimal_type("open", 16, 6));
+        assert!(is_decimal_type("avg_price", 16, 6));
+        assert!(is_decimal_type("close", 16, 6));
+        assert!(is_decimal_type("high", 16, 6));
+        assert!(is_decimal_type("low", 16, 6));
+        assert!(is_decimal_type("amount", 20, 6));
+        assert!(is_decimal_type("amount_sum", 20, 6));
+        assert!(is_decimal_type("diff_price", 16, 6));
+        assert!(is_decimal_type("diff_rate", 16, 6));
+
+        // Test array fields
+        let test_fixed_size_list = |field_name: &str, expected_type: DataType| {
+            let field = schema.field_with_name(field_name).unwrap();
+            match field.data_type() {
+                DataType::FixedSizeList(item_field, size) => {
+                    assert_eq!(*size, 5, "Fixed size list should have size 5");
+                    assert_eq!(item_field.data_type(), &expected_type);
+                }
+                _ => panic!("Field {} should be a FixedSizeList", field_name),
+            }
+        };
+
+        test_fixed_size_list("bid_price", DataType::Decimal128(16_u8, 6_i8));
+        test_fixed_size_list("ask_price", DataType::Decimal128(16_u8, 6_i8));
+        test_fixed_size_list("bid_volume", DataType::Int64);
+        test_fixed_size_list("ask_volume", DataType::Int64);
+
+        // Test string fields
+        assert!(matches!(
+            schema.field_with_name("code").unwrap().data_type(),
+            DataType::Utf8
+        ));
+        assert!(matches!(
+            schema.field_with_name("date").unwrap().data_type(),
+            DataType::Utf8
+        ));
+        assert!(matches!(
+            schema.field_with_name("time").unwrap().data_type(),
+            DataType::Utf8
+        ));
 
         Ok(())
     }
