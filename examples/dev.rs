@@ -97,20 +97,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut count = 0;
     // Handle sending quotes in the main task
-    tokio::spawn(async move {
-        while let Ok(quote) = quote_receiver.recv_async().await {
-            match writer.write_all(&quote).await {
-                Ok(_) => {
-                    count += 1;
-                    tracing::info!("quote sent: {}", count);
-                },
-                Err(e) => {
-                    tracing::error!("Failed to write to TCP stream: {}", e);
-                }
+    // tokio::spawn(async move {
+      
+    // });
+    while let Ok(quote) = quote_receiver.recv_async().await {
+        match writer.write_all(&quote).await {
+            Ok(_) => {
+                count += 1;
+                tracing::info!("quote sent: {}", count);
+            },
+            Err(e) => {
+                tracing::error!("Failed to write to TCP stream: {}", e);
             }
         }
-    });
-
-    std::thread::sleep(std::time::Duration::from_secs(30));
+    }
+    match writer.shutdown().await {
+        Ok(_) => {
+            tracing::info!("TCP stream shutdown");
+        }
+        Err(e) => {
+            tracing::error!("Failed to shutdown TCP stream: {}", e);
+        }
+    }
+    // std::thread::sleep(std::time::Duration::from_secs(30));    
     Ok(())
 }

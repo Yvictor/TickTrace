@@ -24,6 +24,10 @@ struct Args {
     #[arg(short, long, default_value = "1024")]
     batch_size: usize,
 
+    /// Max records per file
+    #[arg(short, long, default_value = "100000")]
+    max_records_per_file: usize,
+
     /// Channel capacity
     #[arg(short, long, default_value = "16384")]
     capacity: usize,
@@ -59,6 +63,7 @@ async fn main() -> Result<()> {
         quote_receiver,
         args.batch_size,
         args.output_dir.to_str().unwrap().to_string(),
+        args.max_records_per_file,
     )?;
     tokio::spawn(async move {
         if let Err(e) = consumer.run().await {
