@@ -2,7 +2,7 @@ mod message;
 mod server;
 mod processor;
 mod consumer;
-
+mod writer;
 use anyhow::Result;
 use clap::Parser;
 use flume::bounded;

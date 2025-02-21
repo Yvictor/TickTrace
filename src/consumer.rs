@@ -1,28 +1,23 @@
 use crate::message::QuoFOPv2;
 use anyhow::Result;
-use arrow_schema::{Field, FieldRef, Schema, DataType};
+use arrow_schema::{DataType, Field, FieldRef, Schema};
 use flume::Receiver;
-use parquet::arrow::arrow_writer::ArrowWriter;
-use parquet::file::properties::WriterProperties;
-// use serde_arrow::schema::{SchemaLike, TracingOptions};
-use std::fs::File;
-use std::path::Path;
 use std::sync::Arc;
-use tracing::info;
+use crate::writer::{QuoteWriter, parquet::ParquetQuoteWriter};
 
 
 pub struct QuoteConsumer {
     receiver: Receiver<QuoFOPv2>,
     batch_size: usize,
-    output_dir: String,
-    current_file: Option<String>,
-    fields: Vec<FieldRef>,
-    schema: Arc<Schema>,
-    current_writer: Option<ArrowWriter<File>>,
-    current_records: usize,
-    max_records_per_file: usize,
+    writer: Box<dyn QuoteWriter>,
+    // output_dir: String,
+    // current_file: Option<String>,
+    // fields: Vec<FieldRef>,
+    // schema: Arc<Schema>,
+    // current_writer: Option<ArrowWriter<File>>,
+    // current_records: usize,
+    // max_records_per_file: usize,
 }
-
 
 impl QuoteConsumer {
     fn create_schema() -> Result<(Vec<FieldRef>, Arc<Schema>)> {
@@ -32,7 +27,11 @@ impl QuoteConsumer {
             Field::new("code", DataType::Utf8, false),
             Field::new("date", DataType::Utf8, false),
             Field::new("time", DataType::Utf8, false),
-            Field::new("target_kind_price", DataType::Decimal128(precision, scale), false),
+            Field::new(
+                "target_kind_price",
+                DataType::Decimal128(precision, scale),
+                false,
+            ),
             Field::new("open", DataType::Decimal128(precision, scale), false),
             Field::new("avg_price", DataType::Decimal128(precision, scale), false),
             Field::new("close", DataType::Decimal128(precision, scale), false),
@@ -53,7 +52,11 @@ impl QuoteConsumer {
             Field::new(
                 "bid_price",
                 DataType::FixedSizeList(
-                    Arc::new(Field::new("item", DataType::Decimal128(precision, scale), false)),
+                    Arc::new(Field::new(
+                        "item",
+                        DataType::Decimal128(precision, scale),
+                        false,
+                    )),
                     5,
                 ),
                 false,
@@ -71,7 +74,11 @@ impl QuoteConsumer {
             Field::new(
                 "ask_price",
                 DataType::FixedSizeList(
-                    Arc::new(Field::new("item", DataType::Decimal128(precision, scale), false)),
+                    Arc::new(Field::new(
+                        "item",
+                        DataType::Decimal128(precision, scale),
+                        false,
+                    )),
                     5,
                 ),
                 false,
@@ -86,12 +93,23 @@ impl QuoteConsumer {
                 DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, false)), 5),
                 false,
             ),
-            Field::new("first_derived_bid_price", DataType::Decimal128(precision, scale), false),
-            Field::new("first_derived_ask_price", DataType::Decimal128(precision, scale), false),
+            Field::new(
+                "first_derived_bid_price",
+                DataType::Decimal128(precision, scale),
+                false,
+            ),
+            Field::new(
+                "first_derived_ask_price",
+                DataType::Decimal128(precision, scale),
+                false,
+            ),
             Field::new("first_derived_bid_volume", DataType::Int64, false),
             Field::new("first_derived_ask_volume", DataType::Int64, false),
             Field::new("simtrade", DataType::Int32, false),
-        ].into_iter().map(|f| Arc::new(f)).collect();   
+        ]
+        .into_iter()
+        .map(|f| Arc::new(f))
+        .collect();
 
         // let fields = Vec::<FieldRef>::from_type::<QuoFOPv2>(TracingOptions::default())?;
         // let fields: Vec<FieldRef> = SchemaLike::from_type::<QuoFOPv2>(TracingOptions::default())?.into_iter().map(|f| Arc::new(f)).collect();
@@ -113,72 +131,31 @@ impl QuoteConsumer {
         Ok((fields, schema))
     }
 
-    pub fn new(
+    pub fn new_parquet_writer(
         receiver: Receiver<QuoFOPv2>,
         batch_size: usize,
         output_dir: String,
         max_records_per_file: usize,
     ) -> Result<Self> {
         let (fields, schema) = Self::create_schema()?;
-
+        let writer = ParquetQuoteWriter::new(output_dir, fields, schema, max_records_per_file);
         Ok(Self {
             receiver,
             batch_size,
-            output_dir,
-            current_file: None,
-            fields,
-            schema,
-            current_writer: None,
-            current_records: 0,
-            max_records_per_file,
+            writer: Box::new(writer),
         })
     }
 
-    fn create_new_writer(&mut self) -> Result<()> {
-        let filename = format!(
-            "quotes_{}.parquet",
-            chrono::Local::now().format("%Y%m%d_%H%M%S")
-        );
-        let path = Path::new(&self.output_dir).join(&filename);
-
-        let file = File::create(path)?;
-        let props = WriterProperties::builder()
-            .set_compression(parquet::basic::Compression::SNAPPY)
-            .build();
-
-        self.current_writer = Some(ArrowWriter::try_new(file, self.schema.clone(), Some(props))?);
-        self.current_file = Some(filename);
-        self.current_records = 0;
-
-        Ok(())
+    pub fn new(
+        receiver: Receiver<QuoFOPv2>,
+        batch_size: usize,
+        output_dir: String,
+        max_records_per_file: usize,
+    ) -> Result<Self> {
+        Self::new_parquet_writer(receiver, batch_size, output_dir, max_records_per_file)
     }
 
-    fn write_batch(&mut self, quotes: &[QuoFOPv2]) -> Result<()> {
-        // Convert quotes to Arrow arrays using serde_arrow
-        let record_batch = serde_arrow::to_record_batch(self.fields.as_slice(), &quotes)?;
 
-        // Create new writer if we don't have one
-        if self.current_writer.is_none() {
-            self.create_new_writer()?;
-        }
-
-        // Write the batch
-        if let Some(writer) = &mut self.current_writer {
-            writer.write(&record_batch)?;
-            self.current_records += quotes.len();
-
-            // If we've exceeded the max records per file, finish this file and create a new one
-            if self.current_records >= self.max_records_per_file {
-                let filename = self.current_file.clone().unwrap();
-                // Take ownership of the writer before closing
-                let writer = self.current_writer.take().unwrap();
-                writer.close()?;
-                info!("Completed file {} with {} records", filename, self.current_records);
-            }
-        }
-
-        Ok(())
-    }
 
     pub async fn run(&mut self) -> Result<()> {
         let mut quotes = Vec::with_capacity(self.batch_size);
@@ -187,23 +164,17 @@ impl QuoteConsumer {
             quotes.push(quote);
 
             if quotes.len() >= self.batch_size {
-                self.write_batch(&quotes)?;
+                self.writer.write_batch(&quotes)?;
                 quotes.clear();
             }
         }
 
         // Write any remaining quotes
         if !quotes.is_empty() {
-            self.write_batch(&quotes)?;
+            self.writer.write_batch(&quotes)?;
         }
 
-        // Close the final file if needed
-        if let Some(writer) = self.current_writer.take() {
-            let filename = self.current_file.clone().unwrap();
-            writer.close()?;
-            info!("Completed final file {} with {} records", filename, self.current_records);
-        }
-
+        self.writer.close()?;
         Ok(())
     }
 }
@@ -212,15 +183,15 @@ impl QuoteConsumer {
 mod tests {
     use super::*;
     use crate::message::QuoFOPv2;
-    use compact_str::CompactString;
-    use rust_decimal_macros::dec;
-    use std::fs;
-    use tempfile::tempdir;
     use arrow::datatypes::DataType;
+    use compact_str::CompactString;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::basic::LogicalType;
     use parquet::basic::Type;
-
+    use rust_decimal_macros::dec;
+    use std::fs;
+    use tempfile::tempdir;
+    use std::fs::File;
     fn create_test_quote() -> QuoFOPv2 {
         QuoFOPv2 {
             code: CompactString::from("2330"),
@@ -363,16 +334,40 @@ mod tests {
         };
 
         // Test decimal fields
-        assert!(is_decimal_type("target_kind_price", expected_precision, expected_scale));
+        assert!(is_decimal_type(
+            "target_kind_price",
+            expected_precision,
+            expected_scale
+        ));
         assert!(is_decimal_type("open", expected_precision, expected_scale));
-        assert!(is_decimal_type("avg_price", expected_precision, expected_scale));
+        assert!(is_decimal_type(
+            "avg_price",
+            expected_precision,
+            expected_scale
+        ));
         assert!(is_decimal_type("close", expected_precision, expected_scale));
         assert!(is_decimal_type("high", expected_precision, expected_scale));
         assert!(is_decimal_type("low", expected_precision, expected_scale));
-        assert!(is_decimal_type("amount", expected_precision, expected_scale));
-        assert!(is_decimal_type("amount_sum", expected_precision, expected_scale));
-        assert!(is_decimal_type("diff_price", expected_precision, expected_scale));
-        assert!(is_decimal_type("diff_rate", expected_precision, expected_scale));
+        assert!(is_decimal_type(
+            "amount",
+            expected_precision,
+            expected_scale
+        ));
+        assert!(is_decimal_type(
+            "amount_sum",
+            expected_precision,
+            expected_scale
+        ));
+        assert!(is_decimal_type(
+            "diff_price",
+            expected_precision,
+            expected_scale
+        ));
+        assert!(is_decimal_type(
+            "diff_rate",
+            expected_precision,
+            expected_scale
+        ));
 
         // Test array fields
         let test_fixed_size_list = |field_name: &str, expected_type: DataType| {
@@ -386,8 +381,14 @@ mod tests {
             }
         };
 
-        test_fixed_size_list("bid_price", DataType::Decimal128(expected_precision, expected_scale));
-        test_fixed_size_list("ask_price", DataType::Decimal128(expected_precision, expected_scale));
+        test_fixed_size_list(
+            "bid_price",
+            DataType::Decimal128(expected_precision, expected_scale),
+        );
+        test_fixed_size_list(
+            "ask_price",
+            DataType::Decimal128(expected_precision, expected_scale),
+        );
         test_fixed_size_list("bid_volume", DataType::Int64);
         test_fixed_size_list("ask_volume", DataType::Int64);
 
@@ -427,7 +428,12 @@ mod tests {
         // Get the written parquet file
         let files: Vec<_> = fs::read_dir(&output_dir)?
             .filter_map(|entry| entry.ok())
-            .filter(|entry| entry.path().extension().map_or(false, |ext| ext == "parquet"))
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .map_or(false, |ext| ext == "parquet")
+            })
             .collect();
         assert_eq!(files.len(), 1);
 
@@ -435,13 +441,16 @@ mod tests {
         let file = File::open(files[0].path()).unwrap();
         // Read the parquet file schema
         // Configure options for reading from the async souce
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file)
-                .unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
         let schema = builder.parquet_schema();
 
         // Helper function to check decimal type
         let is_decimal_type = |field_name: &str, p: i32, s: i32| {
-            let field = schema.columns().iter().find(|f| f.name() == field_name).unwrap();
+            let field = schema
+                .columns()
+                .iter()
+                .find(|f| f.name() == field_name)
+                .unwrap();
             println!("field: {:?}", field);
             matches!(
                 field.logical_type(),
@@ -450,17 +459,47 @@ mod tests {
         };
 
         // Verify decimal fields
-        assert!(is_decimal_type("target_kind_price", expected_precision, expected_scale), "target_kind_price has wrong type");
+        assert!(
+            is_decimal_type("target_kind_price", expected_precision, expected_scale),
+            "target_kind_price has wrong type"
+        );
         // assert!(false);
-        assert!(is_decimal_type("open", expected_precision, expected_scale), "open has wrong type");
-        assert!(is_decimal_type("avg_price", expected_precision, expected_scale), "avg_price has wrong type");
-        assert!(is_decimal_type("close", expected_precision, expected_scale), "close has wrong type");
-        assert!(is_decimal_type("high", expected_precision, expected_scale), "high has wrong type");
-        assert!(is_decimal_type("low", expected_precision, expected_scale), "low has wrong type");
-        assert!(is_decimal_type("amount", expected_precision, expected_scale), "amount has wrong type");
-        assert!(is_decimal_type("amount_sum", expected_precision, expected_scale), "amount_sum has wrong type");
-        assert!(is_decimal_type("diff_price", expected_precision, expected_scale), "diff_price has wrong type");
-        assert!(is_decimal_type("diff_rate", expected_precision, expected_scale), "diff_rate has wrong type");
+        assert!(
+            is_decimal_type("open", expected_precision, expected_scale),
+            "open has wrong type"
+        );
+        assert!(
+            is_decimal_type("avg_price", expected_precision, expected_scale),
+            "avg_price has wrong type"
+        );
+        assert!(
+            is_decimal_type("close", expected_precision, expected_scale),
+            "close has wrong type"
+        );
+        assert!(
+            is_decimal_type("high", expected_precision, expected_scale),
+            "high has wrong type"
+        );
+        assert!(
+            is_decimal_type("low", expected_precision, expected_scale),
+            "low has wrong type"
+        );
+        assert!(
+            is_decimal_type("amount", expected_precision, expected_scale),
+            "amount has wrong type"
+        );
+        assert!(
+            is_decimal_type("amount_sum", expected_precision, expected_scale),
+            "amount_sum has wrong type"
+        );
+        assert!(
+            is_decimal_type("diff_price", expected_precision, expected_scale),
+            "diff_price has wrong type"
+        );
+        assert!(
+            is_decimal_type("diff_rate", expected_precision, expected_scale),
+            "diff_rate has wrong type"
+        );
 
         // Test array fields
         // let test_fixed_size_list = |field_name: &str, expected_type: DataType| {
@@ -488,33 +527,89 @@ mod tests {
 
         // Test string fields
         assert!(
-            matches!(schema.columns().iter().find(|f| f.name() == "code").unwrap().physical_type(), Type::BYTE_ARRAY),
+            matches!(
+                schema
+                    .columns()
+                    .iter()
+                    .find(|f| f.name() == "code")
+                    .unwrap()
+                    .physical_type(),
+                Type::BYTE_ARRAY
+            ),
             "code should be Utf8"
         );
         assert!(
-            matches!(schema.columns().iter().find(|f| f.name() == "date").unwrap().physical_type(), Type::BYTE_ARRAY),
+            matches!(
+                schema
+                    .columns()
+                    .iter()
+                    .find(|f| f.name() == "date")
+                    .unwrap()
+                    .physical_type(),
+                Type::BYTE_ARRAY
+            ),
             "date should be Utf8"
         );
         assert!(
-            matches!(schema.columns().iter().find(|f| f.name() == "time").unwrap().physical_type(), Type::BYTE_ARRAY),
+            matches!(
+                schema
+                    .columns()
+                    .iter()
+                    .find(|f| f.name() == "time")
+                    .unwrap()
+                    .physical_type(),
+                Type::BYTE_ARRAY
+            ),
             "time should be Utf8"
         );
 
         // Test integer fields
         assert!(
-            matches!(schema.columns().iter().find(|f| f.name() == "volume").unwrap().physical_type(), Type::INT64),
+            matches!(
+                schema
+                    .columns()
+                    .iter()
+                    .find(|f| f.name() == "volume")
+                    .unwrap()
+                    .physical_type(),
+                Type::INT64
+            ),
             "volume should be Int64"
         );
         assert!(
-            matches!(schema.columns().iter().find(|f| f.name() == "vol_sum").unwrap().physical_type(), Type::INT64),
+            matches!(
+                schema
+                    .columns()
+                    .iter()
+                    .find(|f| f.name() == "vol_sum")
+                    .unwrap()
+                    .physical_type(),
+                Type::INT64
+            ),
             "vol_sum should be Int64"
         );
         assert!(
-            matches!(schema.columns().iter().find(|f| f.name() == "tick_type").unwrap().physical_type(), Type::INT32),
+            matches!(
+                schema
+                    .columns()
+                    .iter()
+                    .find(|f| f.name() == "tick_type")
+                    .unwrap()
+                    .physical_type(),
+                Type::INT32
+            ),
             "tick_type should be Int32"
         );
         assert!(
-            matches!(schema.columns().iter().find(|f| f.name() == "simtrade").unwrap().physical_type(), Type::INT32),
+            matches!(
+                schema
+                    .columns()
+                    .iter()
+                    .find(|f| f.name() == "simtrade")
+                    .unwrap()
+                    .physical_type(),
+                Type::INT32
+            ),
             "simtrade should be Int32"
         );
 
